@@ -1,0 +1,7 @@
+id,client_id,product_id,farmer_id,quantity,status,delivery_time
+1,1,1,2.0,5,Confirmed,today-evening
+2,1,2,1.0,10,Pending,tomorrow_evening
+3,1,1,2.0,2,Confirmed,tomorrow_morning
+4,1,1,1.0,2,Pending,tomorrow_evening
+5,1,2,1.0,3,Pending,today_evening
+6,1,1,1.0,1,Pending,tomorrow_morning
