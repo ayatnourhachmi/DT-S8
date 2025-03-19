@@ -1,4 +1,4 @@
-#!/home/ayat/github-2025/NLP/venv/bin/python3
+#!/home/ayat/github-2025/DT-S8/allo-fellah/backend/venv/bin/python
 # -*- coding: utf-8 -*-
 import re
 import sys
