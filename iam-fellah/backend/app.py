@@ -1,12 +1,11 @@
 from flask import Flask, request, jsonify
 import requests
-from tts import generate_tts  # Import the function from tts.py
-from flask_cors import CORS  # Import CORS for cross-origin requests
+from tts import generate_tts
+from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
+CORS(app)
 
-# Function to translate the order response to Darija
 def translate_to_darija(order_data):
     client_name = order_data["client"]["name"]
     client_phone = order_data["client"]["phone"]
@@ -14,7 +13,6 @@ def translate_to_darija(order_data):
     delivery_time = order_data["delivery_time"]
     products = order_data["products"]
     
-    # Translation mapping
     delivery_translation = {
         "tomorrow_morning": "غدا في الصباح",
         "tomorrow_evening": "غدا في العشية",
@@ -45,7 +43,7 @@ def translate_to_darija(order_data):
         f"عندك {product_list}\n"
         f"توصلها ل {client_name}\n"
         f"{delivery_translation.get(delivery_time, 'في وقت غير معروف')}\n"
-        "باش تأكد لنا اتوصلها ضغط على الزر الاخضر وغطلع ليك نمرة لكليان\n"
+        "باش تأكد لنا اتوصلها ضغط على الزر الاخضر وغطلع ليك نمرا ديال لكليان\n"
         "أولا ضغط على لحمرا باش ترفض"
     )
     
@@ -53,33 +51,37 @@ def translate_to_darija(order_data):
 
 @app.route('/api/tts-order-status', methods=['GET'])
 def get_order_status_tts():
-    client_id = request.args.get("client_id", 1)  # Default to 1 if not provided
-    
+    client_id = request.args.get("client_id", 1)
     try:
-        order_status_url = f"http://127.0.0.1:5001/api/order-status?client_id={client_id}"
+        order_status_url = f"http://127.0.0.1:5000/api/order-status?client_id={client_id}"
         response = requests.get(order_status_url)
-        
         if response.status_code != 200:
             return jsonify({
                 "error": "Failed to fetch order status",
                 "client_name": "عميل غير معروف",
                 "client_phone": "٠٠٠٠٠٠٠٠٠٠"
             }), 500
-            
+        
         order_data = response.json()
         translated_text, client_name, client_phone = translate_to_darija(order_data)
         
-        # Generate TTS from the translated text
         try:
-            audio_file = "audios/audio_order.wav"  # Static file path to match the frontend
-            generate_tts(translated_text, output_path=audio_file)  # Save locally instead of URL
+            audio_url = generate_tts(translated_text)
             
-            return jsonify({
-                "success": True,
-                "client_name": client_name,
-                "client_phone": client_phone
-            })
-            
+            if audio_url:
+                return jsonify({
+                    "success": True,
+                    "audio_url": audio_url,
+                    "client_name": client_name,
+                    "client_phone": client_phone
+                })
+            else:
+                return jsonify({
+                    "error": "TTS generation failed to return a valid URL",
+                    "client_name": client_name,
+                    "client_phone": client_phone
+                })
+                
         except Exception as e:
             return jsonify({
                 "error": f"TTS generation failed: {str(e)}",
@@ -95,4 +97,4 @@ def get_order_status_tts():
         })
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=5001)

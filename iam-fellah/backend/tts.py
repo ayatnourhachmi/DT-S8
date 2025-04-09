@@ -11,10 +11,9 @@ def generate_tts(text):
         print(f"🔄 Requesting TTS for text: {text}")
         result = client.predict(
             text=text,
-            speaker_audio_path=handle_file('https://github.com/gradio-app/gradio/raw/main/test/test_files/audio_sample.wav'),
+            speaker_audio_path=handle_file('/home/ayat/github-2025/DT-S8/iam-fellah/backend/testref.wav'),
             temperature=0.75,
             api_name="/infer_EGTTS",
-            use_gpu=False  # Ensure this setting is supported
         )
 
         print(f"✅ Gradio TTS Response: {result}")
@@ -23,7 +22,6 @@ def generate_tts(text):
             print("⚠️ Empty response from TTS API!")
             return None
 
-        # If response is a /tmp/gradio/... path, convert it to a public URL
         if result.startswith("/tmp/gradio/"):
             filename = result.split("/")[-2] + "/" + result.split("/")[-1]
             gradio_audio_url = f"https://medmac01-darija-arabic-tts.hf.space/file={filename}"

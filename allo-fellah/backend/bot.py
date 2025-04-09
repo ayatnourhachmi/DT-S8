@@ -6,20 +6,17 @@ from datetime import datetime, timedelta
 from google import genai
 from google.genai import types
 
-# Initialize clients and models
 client = genai.Client(
     api_key=os.environ.get("GOOGLE_API_KEY"),
 )
 model = "gemini-2.0-flash-exp"
 
-# Load data from CSV files
 products_df = pd.read_csv("products.csv")
 farmers_df = pd.read_csv("farmers.csv")
 clients_df = pd.read_csv("clients.csv")
 farmer_products_df = pd.read_csv("farmer_products.csv")
 orders_df = pd.read_csv("orders.csv")
 
-# Create translation dictionaries
 french_products = {}
 arabic_products = {}
 
@@ -43,7 +40,6 @@ for _, row in products_df.iterrows():
         'english_name': english_name
     }
 
-# Initialize conversation for the model
 conversation = [
     types.Content(
         role="user",
@@ -63,11 +59,9 @@ conversation = [
     )
 ]
 
-# Create system instruction with product awareness
 product_list_french = "\n".join([f"- {p['name']}" for p in french_products.values()])
 product_list_arabic = "\n".join([f"- {p['name']}" for p in arabic_products.values()])
 
-# Format farmer details
 farmer_products_data = []
 for _, fp_row in farmer_products_df.iterrows():
     farmer_id = fp_row['farmer_id']
@@ -78,20 +72,17 @@ for _, fp_row in farmer_products_df.iterrows():
     farmer_row = farmers_df[farmers_df['id'] == farmer_id]
     product_row = products_df[products_df['id'] == product_id]
     
-    # Add error handling to avoid IndexError
     if not farmer_row.empty and not product_row.empty:
         farmer_name = farmer_row['name'].values[0]
         product_name = product_row['name'].values[0]
         
         farmer_products_data.append((farmer_name, product_name, stock, price))
 
-# Format farmer details
 farmer_details = "\n".join([
     f"- {farmer} sells {product} with {stock} kg available at {price} per kilo."
     for farmer, product, stock, price in farmer_products_data
 ])
 
-# Simplified system instruction
 system_instruction = [
     types.Part.from_text(text=f"""
     IMPORTANT: This is a multilingual ordering chatbot.
@@ -122,17 +113,113 @@ system_instruction = [
        - Rank **farmers by distance, price per kg, and feedback rating**.
        - Ask user to select a farmer.
     8. Order Confirmation → Summarize and confirm the order.
-    """)
+    9. Order details :(
+        "product_name":
+        "quantity":
+        "farmer_name":
+        "delivery_time":
+        )"""
+    )
 ]
 
-# Helper functions
+
+def extract_order_details(session_state):
+    """
+    Extract structured order details from the session state
+    for better logging and debugging.
+    
+    Args:
+        session_state: Current session state dictionary
+        
+    Returns:
+        dict: Structured order details
+    """
+    order_details = {
+        "products": [],
+        "farmer_name": None,
+        "farmer_id": None,
+        "delivery_time": None,
+        "total_items": 0,
+        "total_quantity": 0,
+        "language": session_state.get("current_language", "unknown"),
+        "state": session_state.get("current_state", "unknown")
+    }
+    
+    for product_order in session_state.get("product_orders", []):
+        product_info = {
+            "product_id": product_order.get("product_id"),
+            "name": product_order.get("product_name"),
+            "quantity": product_order.get("quantity", 0)
+        }
+        order_details["products"].append(product_info)
+        order_details["total_items"] += 1
+        order_details["total_quantity"] += product_order.get("quantity", 0)
+    
+    if session_state.get("selected_farmer") is not None:
+        order_details["farmer_id"] = session_state.get("selected_farmer")
+        
+        if session_state.get("available_farmers"):
+            for farmer in session_state.get("available_farmers"):
+                if farmer.get("id") == session_state.get("selected_farmer"):
+                    order_details["farmer_name"] = farmer.get("name")
+                    break
+    
+    if session_state.get("delivery_time"):
+        delivery_time = session_state.get("delivery_time")
+        if delivery_time:
+            parts = delivery_time.split("_")
+            if len(parts) == 2:
+                order_details["delivery_time"] = f"{parts[0]} {parts[1]}"
+            else:
+                order_details["delivery_time"] = delivery_time
+    
+    return order_details
+
+def print_order_summary(order_details):
+    """
+    Pretty print order details to console in a structured format.
+    
+    Args:
+        order_details: Structured order details dictionary
+    """
+    print("\n" + "=" * 50)
+    print(" ORDER SUMMARY ".center(50, "="))
+    print("=" * 50)
+    
+    print(f"Language: {order_details['language']}")
+    print(f"Current State: {order_details['state']}")
+    print("-" * 50)
+    
+    if order_details["products"]:
+        print("PRODUCTS:")
+        for i, product in enumerate(order_details["products"], 1):
+            print(f"  {i}. {product['name']} - {product['quantity']} kg (ID: {product['product_id']})")
+        print(f"Total Items: {order_details['total_items']}")
+        print(f"Total Quantity: {order_details['total_quantity']} kg")
+    else:
+        print("No products selected yet")
+    
+    print("-" * 50)
+    
+    if order_details["farmer_name"]:
+        print(f"Selected Farmer: {order_details['farmer_name']} (ID: {order_details['farmer_id']})")
+    else:
+        print("No farmer selected yet")
+    
+    if order_details["delivery_time"]:
+        print(f"Delivery Time: {order_details['delivery_time']}")
+    else:
+        print("No delivery time specified yet")
+    
+    print("=" * 50 + "\n")
+
 def check_stock(product_id, quantity):
     if product_id is None:
         return None
         
     available_farmers = []
     for _, row in farmer_products_df[farmer_products_df['product_id'] == product_id].iterrows():
-        if row['stock'] >= quantity:  # Ensures only farmers with enough stock are considered
+        if row['stock'] >= quantity:
             farmer_id = row['farmer_id']
             farmer_row = farmers_df[farmers_df['id'] == farmer_id]
             
@@ -146,11 +233,10 @@ def check_stock(product_id, quantity):
                 ))
 
     if not available_farmers:
-        return None  # No farmer has the required stock
+        return None
 
     return available_farmers
 
-# Fix 1: Ensure only farmers with sufficient stock are shown
 
 def find_best_farmers(product_id, quantity, client_id):
     """Fix: Ensure only farmers with sufficient stock are shown in ranking"""
@@ -164,10 +250,8 @@ def find_best_farmers(product_id, quantity, client_id):
     client_row = client_row.iloc[0]
     client_lat, client_lon = client_row['latitude'], client_row['longitude']
     
-    # Get farmers with sufficient stock - FIXED to ensure farmers really have enough stock
     available_farmers = []
     for _, row in farmer_products_df[farmer_products_df['product_id'] == product_id].iterrows():
-        # Added strict check to ensure quantity is available
         if row['stock'] >= quantity:
             farmer_id = row['farmer_id']
             farmer_row = farmers_df[farmers_df['id'] == farmer_id]
@@ -175,7 +259,6 @@ def find_best_farmers(product_id, quantity, client_id):
             if not farmer_row.empty:
                 farmer_row = farmer_row.iloc[0]
                 
-                # Calculate distance
                 distance = np.sqrt((farmer_row['latitude'] - client_lat) ** 2 + (farmer_row['longitude'] - client_lon) ** 2)
                 
                 available_farmers.append({
@@ -188,9 +271,8 @@ def find_best_farmers(product_id, quantity, client_id):
                 })
 
     if not available_farmers:
-        return None  # No available farmers with enough stock
+        return None
     
-    # Sort farmers by (distance, then price, then feedback)
     sorted_farmers = sorted(available_farmers, key=lambda x: (x['distance'], x['price'], -x['feedback']))
     
     return sorted_farmers[:3]  # Return top 3 best options
@@ -206,11 +288,9 @@ def save_order(client_id, product_orders, farmer_id, delivery_time):
         return False
     
     try:
-        # Create a list to hold new orders
         new_orders = []
         
         for po in product_orders:
-            # Create new order record
             new_order_id = orders_df['id'].max() + 1 if len(orders_df) > 0 else 1
             new_order = {
                 'id': new_order_id,
@@ -223,26 +303,51 @@ def save_order(client_id, product_orders, farmer_id, delivery_time):
             }
             
             print(f"New order created: {new_order}")
-            # Add to list of new orders
             new_orders.append(new_order)
             
-            # Update stock
             mask = (farmer_products_df['farmer_id'] == farmer_id) & (farmer_products_df['product_id'] == po['product_id'])
-            if mask.any():  # Check if the mask matches any rows
+            if mask.any():
                 farmer_products_df.loc[mask, 'stock'] -= po['quantity']
                 print(f"Updated inventory for farmer {farmer_id}, product {po['product_id']}")
             else:
                 print(f"No matching inventory found for farmer {farmer_id}, product {po['product_id']}")
         
-        # Add new orders to DataFrame - Fixed to properly append
         try:
+            print("\n" + "#" * 60)
+            print("# FINAL ORDER BEING SAVED TO DATABASE #".center(60, "#"))
+            print("#" * 60)
+            
+            farmer_name = "Unknown"
+            farmer_row = farmers_df[farmers_df['id'] == farmer_id]
+            if not farmer_row.empty:
+                farmer_name = farmer_row.iloc[0]['name']
+            
+            order_summary = {
+                "products": [],
+                "farmer_name": farmer_name,
+                "farmer_id": farmer_id,
+                "delivery_time": delivery_time,
+                "client_id": client_id,
+                "total_items": len(product_orders),
+                "total_quantity": sum(po['quantity'] for po in product_orders)
+            }
+            
+            for po in product_orders:
+                order_summary["products"].append({
+                    "product_id": po['product_id'],
+                    "name": po['product_name'],
+                    "quantity": po['quantity']
+                })
+            
+            print_order_summary(order_summary)
+            print("#" * 60 + "\n")
+            
             orders_df = pd.concat([orders_df, pd.DataFrame(new_orders)], ignore_index=True)
             print(f"Orders DataFrame after update: {len(orders_df)} orders")
         except Exception as e:
             print(f"Error in concat operation: {e}")
             return False
         
-        # Save updated CSVs - made more robust
         try:
             orders_df.to_csv("orders.csv", index=False)
             print(f"Order saved successfully! New order count: {len(new_orders)}")
@@ -250,7 +355,6 @@ def save_order(client_id, product_orders, farmer_id, delivery_time):
             farmer_products_df.to_csv("farmer_products.csv", index=False)
             print("Inventory updated successfully!")
             
-            # Verify the save worked
             success = verify_order_saved(client_id, new_orders[0]['product_id'], farmer_id)
             return success
         except Exception as e:
@@ -261,11 +365,9 @@ def save_order(client_id, product_orders, farmer_id, delivery_time):
         print(f"Error processing order: {e}")
         return False
 
-# Additional function to check if order was saved properly
 def verify_order_saved(client_id, product_id, farmer_id):
     """Verify if order was saved properly to CSV"""
     try:
-        # Re-read the CSV to verify data was saved
         verification_df = pd.read_csv("orders.csv")
         matching_orders = verification_df[
             (verification_df['client_id'] == client_id) & 
@@ -291,17 +393,17 @@ def detect_language(text):
     elif any(char in text for char in 'éèêëàâäôöùûüçæœ') or re.search(r'\b(je|tu|vous|nous|le|la|les|bonjour|merci)\b', text.lower()):
         return "french"
     else:
-        return "english"  # Default to English if can't determine
+        return "english"
 
 def detect_products(message, language):
     detected_products = []
     
     if language == "french":
         product_dict = french_products
-        message = message.lower()  # French is case-insensitive
+        message = message.lower()
     elif language == "arabic":
         product_dict = arabic_products
-    else:  # English or other, try both dictionaries
+    else:
         for product_info in products_df.iterrows():
             product_name = product_info[1]['name'].lower()
             if product_name in message.lower():
@@ -314,7 +416,7 @@ def detect_products(message, language):
         return detected_products
         
     for product_name, product_info in product_dict.items():
-        if product_name.lower() in message.lower():  # Ensure lowercase comparison
+        if product_name.lower() in message.lower():
             detected_products.append(product_info)
             
     return detected_products
@@ -336,12 +438,10 @@ def extract_quantity(message, language):
         }
     }
 
-    # Extract numeric values
     match = re.search(r"(\d+)", message)
     if match:
         return int(match.group(1))
 
-    # Extract spelled-out numbers
     words = message.split()
     for word in words:
         word_lower = word.lower()
@@ -349,7 +449,7 @@ def extract_quantity(message, language):
             if word_lower in number_dict:
                 return number_dict[word_lower]
 
-    return 1  # Default to 1kg if no number is detected
+    return 1
 
 def process_order_request(user_input, language, client_id):
     detected_products = detect_products(user_input, language)
@@ -365,7 +465,6 @@ def process_order_request(user_input, language, client_id):
     product = detected_products[0]
     quantity = extract_quantity(user_input, language)
     
-    # Check stock availability
     available_farmers = check_stock(product['id'], quantity)
     
     if available_farmers is None:
@@ -379,7 +478,6 @@ def process_order_request(user_input, language, client_id):
             return f"Unfortunately, we don't have {quantity}kg of {product['name']} in stock. " \
                 f"Would you like to order a smaller quantity or choose another product?", None
 
-    # Rank farmers based on distance, price, and feedback
     best_farmers = find_best_farmers(product['id'], quantity, client_id)
     
     if not best_farmers:
@@ -390,7 +488,6 @@ def process_order_request(user_input, language, client_id):
         else:
             return f"No nearby farmer can provide {quantity}kg of {product['name']}. Would you like to try another product?", None
     
-    # Ask user to select a farmer
     if language == "french":
         farmer_options = "\n".join([
             f"{i+1}. {f['name']} - {f['price']}dh/kg, {round(f['distance'], 2)}km, Note: {f['feedback']}/5"
@@ -416,11 +513,9 @@ def process_order_request(user_input, language, client_id):
     return response, product
 
 
-# Session state storage (in a real app, use Redis or another session store)
 session_states = {}
 
 def run_chatbot_message(user_input, language_hint="french", client_id=1):
-    # Get or create session state
     if client_id not in session_states:
         session_states[client_id] = {
             "current_language": language_hint,
@@ -429,57 +524,42 @@ def run_chatbot_message(user_input, language_hint="french", client_id=1):
             "product_orders": [],
             "delivery_time": None,
             "selected_farmer": None,
-            "conversation": conversation.copy()  # Create a copy of the initial conversation
+            "conversation": conversation.copy()
         }
     
     session = session_states[client_id]
 
-     # 🔥 Prevent session reset after confirmation
-    #if session["current_state"] == "order_confirmation":
-        #return "Votre commande a déjà été confirmée. Voulez-vous commander autre chose ?", "order_confirmation", session["product_orders"], session["conversation"]
-    
-    # Detect language based on input
     detected_language = detect_language(user_input)
-    if detected_language != "english":  # Only update if confidently detected
+    if detected_language != "english":
         session["current_language"] = detected_language
     
-    # State management context
     state_info = ""
     
-    # Process based on current state
     if session["current_state"] == "greeting":
-        # Detect products in initial greeting
         detected_products = detect_products(user_input, session["current_language"])
         if detected_products:
-            # User mentioned a product in greeting
             response, product = process_order_request(user_input, session["current_language"], client_id)
             session["current_product"] = product
             session["current_state"] = "quantity_selection" if product else "product_selection"
         else:
-            # No product mentioned, move to product selection
             session["current_state"] = "product_selection"
             state_info = "Please tell me what product you'd like to order."
     
     elif session["current_state"] == "product_selection":
-        # User is selecting a product
         response, product = process_order_request(user_input, session["current_language"], client_id)
         session["current_product"] = product
         if product:
             session["current_state"] = "quantity_selection"
         else:
-            # Stay in product selection if no valid product found
             state_info = "Still in product selection."
     
     elif session["current_state"] == "quantity_selection":
-        # Extract quantity from user input
         quantity = extract_quantity(user_input, session["current_language"])
         
         if quantity > 0 and session["current_product"]:
-            # Check stock availability
             available_farmers = check_stock(session["current_product"]["id"], quantity)
             
             if available_farmers:
-                # Add product to order
                 session["product_orders"].append({
                     "product_id": session["current_product"]["id"],
                     "product_name": session["current_product"]["name"],
@@ -488,7 +568,6 @@ def run_chatbot_message(user_input, language_hint="french", client_id=1):
                 })
                 session["current_state"] = "more_products"
                 
-                # Add context info based on language
                 if session["current_language"] == "french":
                     state_info = f"Quantité de {quantity}kg pour {session['current_product']['name']} ajoutée."
                 elif session["current_language"] == "arabic":
@@ -496,7 +575,6 @@ def run_chatbot_message(user_input, language_hint="french", client_id=1):
                 else:
                     state_info = f"Added {quantity}kg of {session['current_product']['name']}."
             else:
-                # Stock not available
                 if session["current_language"] == "french":
                     state_info = f"Quantité non disponible pour {session['current_product']['name']}."
                 elif session["current_language"] == "arabic":
@@ -505,7 +583,6 @@ def run_chatbot_message(user_input, language_hint="french", client_id=1):
                     state_info = f"Quantity not available for {session['current_product']['name']}."
     
     elif session["current_state"] == "more_products":
-        # Check if user wants to add more products
         if any(word in user_input.lower() for word in ["oui", "yes", "نعم", "أجل"]):
             session["current_state"] = "product_selection"
             session["current_product"] = None
@@ -513,7 +590,6 @@ def run_chatbot_message(user_input, language_hint="french", client_id=1):
             session["current_state"] = "delivery_time"
     
     elif session["current_state"] == "delivery_time":
-        # Parse delivery time from user input
         if any(word in user_input.lower() for word in ["aujourd", "today", "اليوم"]):
             time_preference = "today"
         else:
@@ -527,7 +603,6 @@ def run_chatbot_message(user_input, language_hint="french", client_id=1):
         session["delivery_time"] = f"{time_preference}_{day_part}"
         session["current_state"] = "farmer_selection"
         
-        # Display available farmers for the first product
         if session["product_orders"]:
             first_order = session["product_orders"][0]
             best_farmers = find_best_farmers(
@@ -537,7 +612,6 @@ def run_chatbot_message(user_input, language_hint="french", client_id=1):
             )
             
             if best_farmers:
-                # Format farmer options based on language
                 if session["current_language"] == "french":
                     farmer_options = "\n".join([
                         f"{i+1}. {f['name']} - {f['price']}dh/kg, {round(f['distance'], 2)}km, Note: {f['feedback']}/5"
@@ -557,25 +631,20 @@ def run_chatbot_message(user_input, language_hint="french", client_id=1):
                     ])
                     state_info = f"Please choose a farmer:\n{farmer_options}"
                 
-                # Store the farmer options for later selection
                 session["available_farmers"] = best_farmers
     
     elif session["current_state"] == "farmer_selection":
-        # Parse farmer selection
         try:
-            # Extract number from input (1, 2, 3, etc.)
             selected_num = int(re.search(r'(\d+)', user_input).group(1))
             if 1 <= selected_num <= len(session["available_farmers"]):
                 selected_farmer = session["available_farmers"][selected_num - 1]
                 session["selected_farmer"] = selected_farmer["id"]
                 session["current_state"] = "order_confirmation"
                 
-                # Generate order summary
                 products_summary = []
                 for po in session["product_orders"]:
                     products_summary.append(f"{po['product_name']}: {po['quantity']}kg")
                 
-                # Format summary based on language
                 if session["current_language"] == "french":
                     state_info = f"Récapitulatif de commande:\n" \
                                 f"Produits: {', '.join(products_summary)}\n" \
@@ -595,7 +664,6 @@ def run_chatbot_message(user_input, language_hint="french", client_id=1):
                                 f"Delivery time: {session['delivery_time'].replace('_', ' ')}\n" \
                                 f"Please confirm (yes/no)"
         except:
-            # Invalid selection
             if session["current_language"] == "french":
                 state_info = "Sélection non valide. Veuillez choisir un numéro."
             elif session["current_language"] == "arabic":
@@ -603,11 +671,8 @@ def run_chatbot_message(user_input, language_hint="french", client_id=1):
             else:
                 state_info = "Invalid selection. Please choose a number."
     
-    # In the run_chatbot_message function, replace the order_confirmation state handling with this:
     elif session["current_state"] == "order_confirmation":
-        # Process confirmation
         if any(word in user_input.lower() for word in ["oui", "yes", "نعم", "أجل"]):
-            # Save order to database
             order_saved = save_order(
                 client_id, 
                 session["product_orders"], 
@@ -616,7 +681,6 @@ def run_chatbot_message(user_input, language_hint="french", client_id=1):
             )
             
             if order_saved:
-                # Reset session for new orders but keep language
                 current_language = session["current_language"]
                 session.clear()
                 session["current_language"] = current_language
@@ -624,7 +688,6 @@ def run_chatbot_message(user_input, language_hint="french", client_id=1):
                 session["product_orders"] = []
                 session["conversation"] = conversation.copy()
                 
-                # Success message based on language
                 if session["current_language"] == "french":
                     state_info = "Commande confirmée avec succès! Souhaitez-vous commander autre chose?"
                 elif session["current_language"] == "arabic":
@@ -632,7 +695,6 @@ def run_chatbot_message(user_input, language_hint="french", client_id=1):
                 else:
                     state_info = "Order confirmed successfully! Would you like to order something else?"
             else:
-                # Error saving order
                 if session["current_language"] == "french":
                     state_info = "Erreur lors de l'enregistrement de la commande. Veuillez réessayer."
                 elif session["current_language"] == "arabic":
@@ -640,7 +702,6 @@ def run_chatbot_message(user_input, language_hint="french", client_id=1):
                 else:
                     state_info = "Error saving the order. Please try again."
         else:
-            # Order canceled
             if session["current_language"] == "french":
                 state_info = "Commande annulée. Que souhaitez-vous faire maintenant?"
             elif session["current_language"] == "arabic":
@@ -650,7 +711,6 @@ def run_chatbot_message(user_input, language_hint="french", client_id=1):
             
             session["current_state"] = "greeting"
     
-    # Update context with product orders if any
     if session["product_orders"]:
         products_summary = []
         for po in session["product_orders"]:
@@ -664,7 +724,6 @@ def run_chatbot_message(user_input, language_hint="french", client_id=1):
         else:
             state_info += f"\nOrdered products: {', '.join(products_summary)}"
     
-    # Add user message to conversation with context
     session["conversation"].append(
         types.Content(
             role="user",
@@ -672,7 +731,6 @@ def run_chatbot_message(user_input, language_hint="french", client_id=1):
         )
     )
     
-    # Generate response
     response = client.models.generate_content(
         model=model,
         contents=session["conversation"],
@@ -685,7 +743,6 @@ def run_chatbot_message(user_input, language_hint="french", client_id=1):
         )
     )
     
-    # Add model response to conversation
     session["conversation"].append(
         types.Content(
             role="model",
@@ -693,10 +750,11 @@ def run_chatbot_message(user_input, language_hint="french", client_id=1):
         )
     )
     
-    # Return response and debug info
+    order_details = extract_order_details(session_states[client_id])
+    print_order_summary(order_details)
+
     return response.text, session["current_state"], len(detect_products(user_input, session["current_language"])), len(session["product_orders"])
 
-# Example usage
 if __name__ == "__main__":
     print("Chatbot initialized. Type 'exit' to quit.")
     client_id = 1
